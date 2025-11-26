@@ -1,0 +1,24 @@
+{
+  "name": "ff-tcp-login",
+  "version": "1.0.0",
+  "description": "TCP Login System for Free Fire - Node.js Version",
+  "main": "login.js",
+  "scripts": {
+    "start": "node login.js",
+    "get-id": "node get.js"
+  },
+  "keywords": [
+    "free-fire",
+    "tcp",
+    "login",
+    "garena"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.13.2",
+    "jsonwebtoken": "^9.0.2",
+    "protobufjs": "^7.5.4",
+    "random-useragent": "^0.5.0"
+  }
+}
