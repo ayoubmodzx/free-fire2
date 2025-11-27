@@ -1,7 +1,7 @@
 const SessionManager = require('./sessionManager');
 
 const TOKENS = [
-    'b4904c5a9f497da3225930af68b8169919416a4c5c0d3ee267567b12fc1df01a',
+    '963425d66c1729ba1aeb70f35276732fdd650e96bd95d12185b446d271ade1a3',
     // 'token2',
     // 'token3',
 ];
