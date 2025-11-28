@@ -100,15 +100,19 @@ class SessionManager {
         this.onStatusChange = onStatusChange || (() => {});
         this.status = 'idle';
         this.tcpClients = { whisper: null, online: null };
+        this.pendingClients = { whisper: null, online: null };
         this.heartbeatInterval = null;
         this.connectionCheckInterval = null;
+        this.preemptiveReconnectInterval = null;
         this.accountId = null;
         this.isStopped = false;
         this.reconnectTimeout = null;
         this.connectionData = null;
         this.lastDataTime = Date.now();
         this.isReconnecting = false;
+        this.isPreparing = false;
         this.firstConnect = true;
+        this.lastError = '';
     }
 
     log(message, type = 'info') {
@@ -254,8 +258,11 @@ class SessionManager {
     cleanupConnections() {
         if (this.heartbeatInterval) { clearInterval(this.heartbeatInterval); this.heartbeatInterval = null; }
         if (this.connectionCheckInterval) { clearInterval(this.connectionCheckInterval); this.connectionCheckInterval = null; }
+        if (this.preemptiveReconnectInterval) { clearInterval(this.preemptiveReconnectInterval); this.preemptiveReconnectInterval = null; }
         if (this.tcpClients.whisper) { try { this.tcpClients.whisper.removeAllListeners(); this.tcpClients.whisper.destroy(); } catch (e) {} this.tcpClients.whisper = null; }
         if (this.tcpClients.online) { try { this.tcpClients.online.removeAllListeners(); this.tcpClients.online.destroy(); } catch (e) {} this.tcpClients.online = null; }
+        if (this.pendingClients.whisper) { try { this.pendingClients.whisper.removeAllListeners(); this.pendingClients.whisper.destroy(); } catch (e) {} this.pendingClients.whisper = null; }
+        if (this.pendingClients.online) { try { this.pendingClients.online.removeAllListeners(); this.pendingClients.online.destroy(); } catch (e) {} this.pendingClients.online = null; }
     }
 
     async connectSockets() {
@@ -265,7 +272,12 @@ class SessionManager {
 
         try {
             this.connectionData = await this.prepareSession();
+            this.lastError = '';
         } catch (e) {
+            if (this.lastError !== e.message) {
+                this.log(`${e.message}`, 'error');
+                this.lastError = e.message;
+            }
             this.scheduleReconnect();
             return;
         }
@@ -295,7 +307,85 @@ class SessionManager {
             this.setStatus('running');
             this.startHeartbeat();
             this.startConnectionCheck();
+            this.startPreemptiveReconnect();
         }
+    }
+
+    async prepareNextSession() {
+        if (this.isStopped || this.isPreparing) return;
+        this.isPreparing = true;
+        
+        try {
+            const newConnectionData = await this.prepareSession();
+            if (this.isStopped) {
+                this.isPreparing = false;
+                return;
+            }
+
+            const { finalToken, whisperIp, whisperPort, onlineIp, onlinePort } = newConnectionData;
+
+            const newWhisper = createTCPSocket();
+            const newOnline = createTCPSocket();
+
+            let whisperConnected = false;
+            let onlineConnected = false;
+
+            const checkAndSwitch = () => {
+                if (whisperConnected && onlineConnected && !this.isStopped) {
+                    const oldWhisper = this.tcpClients.whisper;
+                    const oldOnline = this.tcpClients.online;
+
+                    this.tcpClients.whisper = newWhisper;
+                    this.tcpClients.online = newOnline;
+                    this.connectionData = newConnectionData;
+                    this.lastDataTime = Date.now();
+
+                    this.tcpClients.whisper.on('data', () => { this.lastDataTime = Date.now(); });
+                    this.tcpClients.whisper.on('close', () => { this.handleDisconnect(); });
+                    this.tcpClients.whisper.on('error', () => { this.handleDisconnect(); });
+
+                    this.tcpClients.online.on('data', () => { this.lastDataTime = Date.now(); });
+                    this.tcpClients.online.on('close', () => { this.handleDisconnect(); });
+                    this.tcpClients.online.on('error', () => { this.handleDisconnect(); });
+
+                    if (oldWhisper) { try { oldWhisper.removeAllListeners(); oldWhisper.destroy(); } catch (e) {} }
+                    if (oldOnline) { try { oldOnline.removeAllListeners(); oldOnline.destroy(); } catch (e) {} }
+                }
+            };
+
+            newWhisper.connect(whisperPort, whisperIp, () => {
+                newWhisper.write(Buffer.from(finalToken, 'hex'));
+                whisperConnected = true;
+                checkAndSwitch();
+            });
+
+            newOnline.connect(onlinePort, onlineIp, () => {
+                newOnline.write(Buffer.from(finalToken, 'hex'));
+                onlineConnected = true;
+                checkAndSwitch();
+            });
+
+            newWhisper.on('error', () => {
+                try { newWhisper.destroy(); } catch (e) {}
+            });
+
+            newOnline.on('error', () => {
+                try { newOnline.destroy(); } catch (e) {}
+            });
+
+        } catch (e) {
+        }
+        
+        this.isPreparing = false;
+    }
+
+    startPreemptiveReconnect() {
+        if (this.preemptiveReconnectInterval) clearInterval(this.preemptiveReconnectInterval);
+        this.preemptiveReconnectInterval = setInterval(() => {
+            if (!this.isStopped && !this.isPreparing) {
+                this.prepareNextSession();
+            }
+        }, 15000);
     }
 
     handleDisconnect() {
@@ -365,3 +455,4 @@ class SessionManager {
 }
 
 module.exports = SessionManager;
+
